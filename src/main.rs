@@ -1,6 +1,9 @@
+mod vault;
+mod gate;
+
 use clap::{Parser, Subcommand};
-use std::process::{Command as SysCommand};
 use std::path::PathBuf;
+use vault::AethelVault;
 
 /// AETHEL: Sovereign Security Layer for AI Agents
 #[derive(Parser)]
@@ -18,6 +21,9 @@ enum Commands {
         /// Path to your .openclaw directory
         #[arg(short, long, default_value = "~/.openclaw")]
         path: String,
+        /// Hardware Master Key (In a real app, this would be retrieved from TPM)
+        #[arg(short, long)]
+        key: String,
     },
     /// Starts the Aethel Gate proxy (Sidecar) to intercept malicious requests.
     Start {
@@ -29,29 +35,30 @@ enum Commands {
     Score,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Harden { path } => {
+        Commands::Harden { path, key } => {
             println!("🔒 [AETHEL]: Hardening environment at {}...", path);
-            // In a real deployment, we'd invoke the internal Python vault logic here
-            // or use a Rust-native SQLCipher implementation.
-            let status = SysCommand::new("python3")
-                .arg("vault_logic.py") // Our previously written vault script
-                .arg(path)
-                .status()
-                .expect("Failed to execute hardening script");
             
-            if status.success() {
-                println!("✅ [AETHEL]: Environment Encapsulated. Plaintext logs shredded.");
+            let db_path = "aethel_vault.db"; // Standard vault location
+            match AethelVault::open(db_path, key.as_str()) {
+                Ok(vault) => {
+                    if let Err(e) = vault.migrate_openclaw(path) {
+                        eprintln!("❌ [ERROR]: Migration failed: {}", e);
+                    } else {
+                        println!("✅ [AETHEL]: Environment Encapsulated. Plaintext logs shredded.");
+                    }
+                }
+                Err(e) => eprintln!("❌ [ERROR]: Failed to open Sovereign Vault: {}", e),
             }
         }
         Commands::Start { port } => {
             println!("🛡️ [AETHEL]: Sovereign Gate active on localhost:{}", port);
             println!("⚠️  [INFO]: Point your OpenClaw API_BASE to this address to stay protected.");
-            // This would call our warp-based proxy logic from the previous step
-            start_gate_proxy(*port);
+            gate::start_server(*port).await;
         }
         Commands::Score => {
             println!("📊 [AETHEL]: Calculating Sovereign Score...");
@@ -63,9 +70,4 @@ fn main() {
             println!("TOTAL SCORE: 98/100");
         }
     }
-}
-
-fn start_gate_proxy(port: u16) {
-    // Placeholder for our Warp proxy logic
-    // In production, this runs a loopback thread
 }
